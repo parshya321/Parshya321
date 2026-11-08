@@ -1,0 +1,129 @@
+# VoD platform: FastAPI backend + MongoDB + Redis + origin health checker.
+# Usage:  cp .env.example .env  (fill it in)  &&  docker compose up -d --build
+
+name: vod-platform
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-build: &app-build
+  context: .
+  dockerfile: Dockerfile
+
+# Settings shared by the API and the health checker.
+x-app-env: &app-env
+  MONGO_URI: mongodb://${MONGO_APP_USER:?set MONGO_APP_USER}:${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD}@mongo:27017/${MONGO_DB:-vod_platform}?authSource=${MONGO_DB:-vod_platform}
+  MONGO_DB: ${MONGO_DB:-vod_platform}
+  REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+  ASSET_SIGNING_KEY: ${ASSET_SIGNING_KEY:?set ASSET_SIGNING_KEY}
+  ALLOWED_ORIGIN_HOSTS: ${ALLOWED_ORIGIN_HOSTS:?set ALLOWED_ORIGIN_HOSTS}
+
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    command: ["--wiredTigerCacheSizeGB", "${MONGO_CACHE_GB:-1}"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD}
+      MONGO_DB: ${MONGO_DB:-vod_platform}
+      MONGO_APP_USER: ${MONGO_APP_USER:?set MONGO_APP_USER}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD}
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+      - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/10-app-user.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\" | grep -q 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    networks: [backend]
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - exec redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no --maxmemory ${REDIS_MAXMEMORY:-256mb} --maxmemory-policy volatile-lru
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [backend]
+    logging: *default-logging
+
+  api:
+    build: *app-build
+    image: vod-platform:latest
+    restart: unless-stopped
+    init: true
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      <<: *app-env
+      JWT_KEY: ${JWT_KEY:?set JWT_KEY}
+      JWT_ALGORITHMS: ${JWT_ALGORITHMS:-HS256}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-}
+      JWT_ISSUER: ${JWT_ISSUER:-}
+      ASSET_URL_TTL_SECONDS: ${ASSET_URL_TTL_SECONDS:-21600}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    networks: [backend, edge]
+    logging: *default-logging
+
+  health-checker:
+    build: *app-build
+    image: vod-platform:latest
+    restart: unless-stopped
+    init: true
+    command: ["python", "health_check.py"]
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      <<: *app-env
+      HC_INTERVAL: ${HC_INTERVAL:-30}
+      HC_TIMEOUT: ${HC_TIMEOUT:-5}
+      HC_FAIL_THRESHOLD: ${HC_FAIL_THRESHOLD:-3}
+      HC_RECOVER_THRESHOLD: ${HC_RECOVER_THRESHOLD:-2}
+      HC_DEEP: ${HC_DEEP:-1}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    networks: [backend, edge]
+    logging: *default-logging
+
+networks:
+  backend:
+    internal: true
+  edge: {}
+
+volumes:
+  mongo_data:
+  mongo_config:
