@@ -1,0 +1,11 @@
+# Backend runtime dependencies. For reproducible builds, freeze exact versions after your
+# first successful run:  pip freeze > requirements.lock  (and install from that in the Dockerfile).
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30
+pydantic>=2.7,<3
+motor>=3.5,<4
+pymongo>=4.8,<5
+redis>=5.0.1,<6
+pyjwt>=2.8,<3
+httpx>=0.27
+orjson>=3.10
