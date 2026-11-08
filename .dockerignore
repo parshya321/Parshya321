@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+.git
+__pycache__
+*.pyc
+node_modules
+src
+docker
+README.md
+docker-compose.yml
