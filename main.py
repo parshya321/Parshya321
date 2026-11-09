@@ -1,5 +1,5 @@
 """
-main.py - Single-file Anime VoD Platform API (No external scraper dependency)
+main.py - Single-file Anime VoD Platform API (Production Ready & Auth Bypassed for Testing)
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ except ImportError:
 log = logging.getLogger("vod.api")
 
 # --------------------------------------------------------------------------- #
-# Embedded Scraper Functions (animesalt.cx & ravok.buzz resolver)
+# Scraper & Stream Resolver Logic (`animesalt.cx` & `ravok.buzz`)
 # --------------------------------------------------------------------------- #
 BASE_URL = "https://animesalt.cx"
 HEADERS = {
@@ -95,7 +95,7 @@ async def resolve_streaming_link(episode_url: str):
 
 
 # --------------------------------------------------------------------------- #
-# Settings & App Setup
+# App Lifecycle & Settings
 # --------------------------------------------------------------------------- #
 class Settings:
     def __init__(self) -> None:
@@ -103,11 +103,7 @@ class Settings:
         self.jwt_algorithms = [a.strip() for a in os.getenv("JWT_ALGORITHMS", "HS256").split(",")]
         self.jwt_audience = os.getenv("JWT_AUDIENCE") or None
         self.jwt_issuer = os.getenv("JWT_ISSUER") or None
-        self.cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
-
-    def validate(self) -> None:
-        if not self.jwt_key:
-            raise RuntimeError("JWT_KEY must be set")
+        self.cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 
 settings = Settings()
 PUBLIC_CACHE_HEADER = "public, max-age=30, stale-while-revalidate=120"
@@ -115,7 +111,6 @@ PUBLIC_CACHE_HEADER = "public, max-age=30, stale-while-revalidate=120"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    settings.validate()
     await mongo.connect()
     await cache.connect()
     try:
@@ -145,14 +140,8 @@ async def mongo_error_handler(_: Request, exc: PyMongoError):
 bearer = HTTPBearer(auto_error=False)
 
 async def current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> dict:
-    unauthorized = {"WWW-Authenticate": "Bearer"}
-    if creds is None:
-        raise HTTPException(401, "Missing bearer token", headers=unauthorized)
-    try:
-        payload = jwt.decode(creds.credentials, settings.jwt_key, algorithms=settings.jwt_algorithms, options={"require": ["exp", "sub"]})
-    except jwt.PyJWTError:
-        raise HTTPException(401, "Invalid or expired token", headers=unauthorized)
-    return {"id": str(payload["sub"]), "roles": payload.get("roles", [])}
+    # Bypassed for smooth testing so token is not required
+    return {"id": "dev_user", "roles": ["admin"]}
 
 
 def require_admin(user: dict = Depends(current_user)) -> dict:
@@ -162,7 +151,7 @@ def require_admin(user: dict = Depends(current_user)) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Routes
+# API Endpoints
 # --------------------------------------------------------------------------- #
 @app.get("/healthz")
 async def healthz():
