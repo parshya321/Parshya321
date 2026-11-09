@@ -75,7 +75,7 @@ async def resolve_streaming_link(episode_url: str):
         try:
             response = await client.get(episode_url)
             if response.status_code != 200:
-                raise HTTPException(status_code=400, detail="Failed to fetch episode page.")
+                raise HTTPException(status_code=400, detail=f"Failed to fetch episode page, status code: {response.status_code}")
             
             html_content = response.text
             m3u8_pattern = r'https?://[^\s<>"]+?\.m3u8[^\s<>"]*'
@@ -89,9 +89,11 @@ async def resolve_streaming_link(episode_url: str):
             if iframe:
                 return {"stream_url": iframe['src'], "type": "iframe"}
             
-            raise HTTPException(status_code=404, detail="Streaming source (.m3u8) could not be resolved.")
+            raise HTTPException(status_code=404, detail="Streaming source (.m3u8) could not be found on this page.")
+        except HTTPException as he:
+            raise he
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=f"Scraper Error: {str(e)}")
 
 
 # --------------------------------------------------------------------------- #
