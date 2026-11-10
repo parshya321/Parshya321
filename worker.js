@@ -1,0 +1,95 @@
+const axios = require('axios');
+const cheerio = require('cheerio');
+const mongoose = require('mongoose');
+const Anime = require('./models/Anime');
+
+// MongoDB Connection
+const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://scrapanimes_db_user:9921019931@cluster0.ahrmz7d.mongodb.net/?retryWrites=true&w=majority";
+
+mongoose.connect(MONGO_URI)
+  .then(() => console.log("📦 Worker connected to MongoDB Atlas"))
+  .catch(err => console.error("❌ MongoDB connection error:", err));
+
+async function scrapeCatalogAndSync() {
+  console.log("🔄 Background Sync Started: Checking Animesalt...");
+  try {
+    let page = 1;
+    let hasMorePages = true;
+
+    while (hasMorePages && page <= 2) { // Testing ke liye pehle 2 pages rakhe hain
+      const targetUrl = `https://animesalt.cs/anime?page=${page}`;
+      const { data } = await axios.get(targetUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+      });
+      const $ = cheerio.load(data);
+
+      let animeCards = [];
+      $('.anime-item-selector').each((i, el) => {
+        const title = $(el).find('.title').text().trim();
+        const detailUrl = $(el).find('a').attr('href');
+        const poster = $(el).find('img').attr('src');
+
+        if (title && detailUrl) {
+          animeCards.push({ title, detailUrl, poster });
+        }
+      });
+
+      if (animeCards.length === 0) {
+        hasMorePages = false;
+        break;
+      }
+
+      for (let item of animeCards) {
+        await scrapeAndSaveAnimeDetails(item);
+      }
+
+      page++;
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    console.log("✅ Background Sync Completed Successfully!");
+  } catch (error) {
+    console.error("❌ Scraping Worker Error:", error.message);
+  }
+}
+
+async function scrapeAndSaveAnimeDetails(item) {
+  try {
+    const { data } = await axios.get(item.detailUrl);
+    const $ = cheerio.load(data);
+
+    const title = item.title;
+    const anime_id = item.detailUrl.split('/').pop();
+    const banner = $('.banner-img').attr('src') || item.poster;
+    const synopsis = $('.synopsis-text').text().trim() || "No synopsis available.";
+
+    let episodes = [];
+    $('.episode-list-selector a').each((i, el) => {
+      const epNum = i + 1;
+      const epTitle = $(el).text().trim();
+      const epLink = $(el).attr('href');
+      episodes.push({ ep_num: epNum, title: epTitle, stream_url: epLink });
+    });
+
+    await Anime.findOneAndUpdate(
+      { anime_id },
+      {
+        title,
+        poster: item.poster,
+        banner,
+        synopsis,
+        episodes,
+        updated_at: Date.now()
+      },
+      { upsert: true, new: true }
+    );
+    console.log(`Saved/Updated: ${title} (${episodes.length} episodes)`);
+  } catch (err) {
+    console.error(`Failed to scrape details for ${item.title}:`, err.message);
+  }
+}
+
+// Har 12 ghante me run karega
+setInterval(scrapeCatalogAndSync, 12 * 60 * 60 * 1000);
+
+// Test run ke liye direct call
+scrapeCatalogAndSync();
